@@ -1,0 +1,12 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.conda/
+.cache/
+.env
+.budget.yaml
+.local/
+.venv
+*.sif
+outputs/
+logs/

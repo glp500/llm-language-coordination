@@ -1,0 +1,32 @@
+{
+  "source_repository": "https://github.com/glp500/GameProbe",
+  "source_head": "a77c82d516b3bcc7d270c32ded27af19cb35b09b",
+  "source_worktree": "Includes pre-existing uncommitted work; content hashes, not HEAD alone, identify consulted files.",
+  "files": {
+    "experiments/multilingual/README.md": "92a8cd42321f10e3626245cb300781dbffacc88b692c62bd2a4c82b7eee1522e",
+    "experiments/multilingual/design.yaml": "4c7069689401bfa0e8a784e067b678ac9f7c785791752f74b0ac04f5bff2493f",
+    "experiments/multilingual/proposal.md": "38a3f167f1e8a2c7de60039921ca660217855c9cd393ee89c45be8bdd223a530",
+    "experiments/multilingual/figure-plan.md": "b6291fdfd61ead550a1e3b1913f70a2609fb9358c44d382af6a2e266f479b3d0",
+    "experiments/multilingual/execution.md": "e4beb5c99bdea05fe8f3400497b57d884c9806a363317411c0cbb6708e2f719a",
+    "experiments/multilingual/prompts.json": "6233af97544c602856fbde1ae6e1e2ca9bec16723593d08b1b1c675b81922cad",
+    "experiments/multilingual/run.py": "b3b4e5e949389311cc9977c85d68ada70d1dd8ba1bd08f84ccdc0200bababb6d",
+    "harvest/telemetry.py": "e3b12150e414972db662c9355f420b62ab929c6fce2ed0cfe284162b0e059a92",
+    "requirements-vllm-lock.txt": "906ff12087d944ef3a7e521957cc5af3f4da0c910ff5a27c356007bbf0120b9f"
+  },
+  "migration": "HM-supported games and original focal-agent protocol approved by the user on 15 November 2026. Old code and results remain at the source.",
+  "carried_forward": [
+    "research questions",
+    "six-language cohort",
+    "thinking factor",
+    "Qwen 9B pin",
+    "measurement sampler",
+    "budget constraints"
+  ],
+  "replaced": [
+    "custom native-action controller",
+    "four original game adapters",
+    "all-LLM population",
+    "ten-frame private memory"
+  ],
+  "data_moved": false
+}

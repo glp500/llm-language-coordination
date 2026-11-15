@@ -1,0 +1,13 @@
+[project]
+name = "llm-language-coordination"
+version = "0.1.0"
+description = "Multilingual Hypothetical Minds evaluation with measured energy and emissions"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 130
+exclude = ["vendor"]

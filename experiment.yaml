@@ -1,0 +1,52 @@
+# All durations are allocation ceilings, not measured HM runtime forecasts.
+study: hm-multilingual-v1
+confirmatory: false
+balance_sbu: null  # Read from the ignored local .budget.yaml.
+sbu_per_gpu_hour: 192
+reserve_sbu: null
+languages: [en, nl, fr, es, ar, zh]
+games: [cc, pd, rws, arena]
+scenario: 0
+thinking: [false, true]
+replicates: 2
+frames: 1500
+seed: 76113
+model: Qwen/Qwen3.5-9B
+model_revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+hm_revision: e1788c051608099f4b89c63d19de889a3706e36b
+meltingpot_revision: 0438de9506db218af39e144c671fc697c14ac6c3
+pilot_minutes: 120
+startup_minutes: 15
+request_tokens: 4000
+request_limit: 256
+server_url: http://127.0.0.1:8000/v1
+# Reuse your existing frozen Snellius inference container and weights; do not rebuild it.
+server_command:
+  - apptainer
+  - exec
+  - --nv
+  - harvest.sif
+  - .venv/bin/python
+  - -m
+  - vllm.entrypoints.openai.api_server
+  - --model
+  - Qwen/Qwen3.5-9B
+  - --revision
+  - c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  - --host
+  - 127.0.0.1
+  - --port
+  - "8000"
+  - --max-model-len
+  - "16384"
+  - --gpu-memory-utilization
+  - "0.8"
+  - --disable-prefix-caching
+  - --dtype
+  - bfloat16
+  - --limit-mm-per-prompt
+  - '{"image": 0, "video": 0}'
+  - --generation-config
+  - vllm
+  - --reasoning-parser
+  - qwen3

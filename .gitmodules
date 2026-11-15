@@ -1,0 +1,3 @@
+[submodule "vendor/hypothetical-minds"]
+	path = vendor/hypothetical-minds
+	url = https://github.com/locross93/Hypothetical-Minds.git
