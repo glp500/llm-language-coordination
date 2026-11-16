@@ -16,12 +16,28 @@ provenance; an inspiration paper is not automatically an implemented algorithm.
   HM's [pinned fork](https://github.com/locross93/meltingpot/tree/0438de9506db218af39e144c671fc697c14ac6c3)
   supplies the actual scenarios, background policies and original observation
   permissions. It is Apache-2.0 licensed.
+  Its pinned `meltingpot/lua/levels/the_matrix/components.lua` normalizes both
+  inventory vectors before multiplying. The documented RWS prompt correction
+  follows this implementation, checked against the installed fork's commit metadata.
 - Qwen Team. [Pinned Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B/tree/c202236235762e1c871ad0ccb60c8ee5ba337b9a)
-  and [model card](https://huggingface.co/Qwen/Qwen3.5-9B).
+  and [pinned model card](https://huggingface.co/Qwen/Qwen3.5-9B/blob/c202236235762e1c871ad0ccb60c8ee5ba337b9a/README.md#best-practices).
   Actual focal model, tokenizer/chat template and explicit thinking control.
+  Its sampling and repetition guidance supplies the explicit shared sampler
+  following pilot-09; longer output alone did not prevent loops. The diagnostic
+  comparison did not establish a sampling fix (diagnostic-01: legacy 2/3, Qwen 1/3).
 - [vLLM serving documentation](https://docs.vllm.ai/en/latest/cli/serve/).
   The existing project's frozen vLLM 0.33.0 runtime is reused, including its
   documented `--disable-prefix-caching` spelling and Qwen reasoning parser.
+- [vLLM 0.33.0 thinking-budget control](https://docs.vllm.ai/en/v0.33.0/features/reasoning_outputs/#thinking-budget-control)
+  and [pinned chat request implementation](https://github.com/vllm-project/vllm/blob/v0.33.0/vllm/entrypoints/openai/chat_completion/protocol.py).
+  Native per-request reasoning cap exercised in pilot-08 after total-token exhaustion;
+  no runtime upgrade or hand-written reasoning continuation is required.
+  After pilot-10's PD failure, the server command uses the documented transition
+  phrase in `reasoning_end_str`; diagnostic-03 is a live acceptance check, not a
+  claim that this mechanism already resolves the failure.
+  [Generation-config selection](https://docs.vllm.ai/en/v0.33.0/cli/serve/#--generation-config)
+  and the pinned chat protocol explain why unspecified sampling fields use vLLM
+  defaults when the resident server is launched with `--generation-config vllm`.
 - NIST/SEMATECH: [randomized blocks](https://www.itl.nist.gov/div898/handbook/pri/section3/pri332.htm)
   and [factorial designs](https://www.itl.nist.gov/div898/handbook/pri/section3/pri333.htm).
   Basis for language/mode combinations and allocation blocking.

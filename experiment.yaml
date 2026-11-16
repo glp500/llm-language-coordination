@@ -15,9 +15,18 @@ model: Qwen/Qwen3.5-9B
 model_revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
 hm_revision: e1788c051608099f4b89c63d19de889a3706e36b
 meltingpot_revision: 0438de9506db218af39e144c671fc697c14ac6c3
-pilot_minutes: 120
+pilot_minutes: 240  # Pilot-10's first two episodes took about 28 minutes; allow the full 18-episode check.
 startup_minutes: 15
-request_tokens: 4000
+request_tokens: 8000  # Exercised in pilot-09; the larger cap did not prevent repetition.
+thinking_token_budget: 3000  # Exercised in pilot-08; keep the reasoning cap fixed.
+# Qwen's general thinking profile, shared by both modes to isolate the thinking contrast.
+sampling:
+  temperature: 1.0
+  top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  presence_penalty: 1.5
+  repetition_penalty: 1.0
 request_limit: 256
 server_url: http://127.0.0.1:8000/v1
 # Reuse your existing frozen Snellius inference container and weights; do not rebuild it.
@@ -50,3 +59,6 @@ server_command:
   - vllm
   - --reasoning-parser
   - qwen3
+  # vLLM's documented transition makes the budget boundary instruct an actual final answer.
+  - --reasoning-config
+  - '{"reasoning_start_str": "<think>", "reasoning_end_str": "I have to give the solution based on the reasoning directly now.</think>"}'

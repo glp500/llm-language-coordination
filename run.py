@@ -21,7 +21,7 @@ from unittest.mock import patch
 import yaml
 
 import language
-from controller import Controller, save
+from controller import Controller, sampling_parameters, save
 
 ROOT = Path(__file__).resolve().parent
 
@@ -40,7 +40,7 @@ def configuration():
 
 def allocation(config, stage, episode_minutes):
     """Allocate complete randomized language/mode blocks before any GPU request."""
-    if stage not in {"pilot", "collection"} or not math.isfinite(episode_minutes) or episode_minutes <= 0:
+    if stage not in {"pilot", "collection", "diagnostic"} or not math.isfinite(episode_minutes) or episode_minutes <= 0:
         raise ValueError("Choose a valid stage and positive finite episode minutes")
     for field in ("balance_sbu", "sbu_per_gpu_hour", "reserve_sbu", "pilot_minutes", "startup_minutes"):
         if not isinstance(config[field], (int, float)) or not math.isfinite(config[field]) or config[field] <= 0:
@@ -53,9 +53,18 @@ def allocation(config, stage, episode_minutes):
         raise ValueError("Declare both thinking modes and positive independent replication")
     if not isinstance(config["frames"], int) or not 1 <= config["frames"] <= 1500:
         raise ValueError("Use a horizon of 1–1500 native frames")
+    if type(config["request_tokens"]) is not int or config["request_tokens"] < 1:
+        raise ValueError("request_tokens must be a positive integer")
+    thinking_budget = config.get("thinking_token_budget")
+    if thinking_budget is not None and (
+        type(thinking_budget) is not int or not 0 < thinking_budget < config["request_tokens"]
+    ):
+        raise ValueError("thinking_token_budget must be a positive integer below request_tokens")
+    sampling_parameters(config.get("sampling"))
     rng, episodes, tasks = random.Random(config["seed"]), [], []
     conditions = [(lang, mode) for lang in config["languages"] for mode in config["thinking"]]
-    for replicate in range(1 if stage == "pilot" else config["replicates"]):
+    replicate_count = {"diagnostic": 0, "pilot": 1, "collection": config["replicates"]}[stage]
+    for replicate in range(replicate_count):
         games = list(config["games"])
         rng.shuffle(games)
         for game in games:
@@ -81,13 +90,16 @@ def allocation(config, stage, episode_minutes):
                     }
                 )
             tasks.append(task)
-    if stage == "pilot":
+    if stage == "diagnostic":
+        # Three serial requests have 180-second HTTP timeouts, plus two minutes to flush evidence.
+        tasks, walls = [[]], [config["startup_minutes"] + 11]
+    elif stage == "pilot":
         tasks = [[index for task in tasks for index in task]]
         walls = [config["pilot_minutes"]]
     else:
         walls = [config["startup_minutes"] + len(task) * episode_minutes for task in tasks]
     maximum = sum(walls) / 60 * config["sbu_per_gpu_hour"]
-    committed = 0 if stage == "pilot" else config["pilot_minutes"] / 60 * config["sbu_per_gpu_hour"]
+    committed = config["pilot_minutes"] / 60 * config["sbu_per_gpu_hour"] if stage == "collection" else 0
     if maximum + committed + config["reserve_sbu"] > config["balance_sbu"]:
         raise ValueError("Allocation exceeds the budget after the pilot ceiling and reserve")
     return {
@@ -123,10 +135,60 @@ def source_hashes():
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(paths)}
 
 
-def plan(output, stage, minutes, pilot=None):
+def diagnostic_cases(config, paths):
+    """Freeze three English thinking-on RWS/PD failures, preserving the established RWS correction."""
+    if not paths or len(paths) != 3 or len({p.resolve() for p in paths}) != 3:
+        raise ValueError("Diagnostic requires --replay with three distinct saved requests.jsonl files")
+    cases = []
+    for path in paths:
+        data = path.read_bytes()
+        previous = json.loads((path.parents[1] / "plan.json").read_text())["config"]
+        if any(previous[key] != config[key] for key in ("model", "model_revision", "hm_revision", "meltingpot_revision")):
+            raise ValueError("Replay model or implementation pin differs from the current allocation")
+        spec = json.loads((path.parent / "summary.json").read_text())
+        if spec["game"] not in {"rws", "pd"} or spec["language"] != "en" or spec["thinking"] is not True:
+            raise ValueError("This diagnostic accepts English thinking-on RWS/PD failures only")
+        failed = [r for r in map(json.loads, data.decode().splitlines())
+                  if r.get("response", {}).get("choices", [{}])[0].get("finish_reason") == "length"]
+        if not failed:
+            raise ValueError("Replay source has no saved length-limited response")
+        request = failed[-1]
+        if request["model"] != config["model"] or request["thinking"] is not True or type(request["sampling_seed"]) is not int:
+            raise ValueError("Replay request model, thinking mode or seed is inconsistent")
+        if [m["role"] for m in request["messages"]] != ["system", "user"]:
+            raise ValueError("Replay needs the original system/user message pair")
+        prompt = request["messages"][1]["content"]
+        key = "action_plan" if "'action_plan'" in prompt else "possible_opponent_inventory"
+        if key not in prompt:
+            raise ValueError("Replay prompt lacks the expected dictionary key")
+        system = request["messages"][0]["content"]
+        if spec["game"] == "rws" and "rws_payoff_normalization" not in spec.get("prompt_corrections", []):
+            system = language.correct_payoff(system)
+        cases.append({"source": str(path.resolve()), "source_sha256": hashlib.sha256(data).hexdigest(),
+                      "game": spec["game"], "request": request, "expected_key": key, "replay_system": system})
+    if sorted(case["game"] for case in cases) != ["pd", "rws", "rws"]:
+        raise ValueError("Transition diagnostic requires two RWS failures and one PD failure")
+    return cases
+
+
+def plan(output, stage, minutes, pilot=None, replays=None):
     """Create a new self-contained plan; collection requires a completed pilot with the same sources."""
     config = configuration()
     value = allocation(config, stage, minutes)
+    if stage == "diagnostic":
+        try:
+            command = config["server_command"]
+            transition = json.loads(command[command.index("--reasoning-config") + 1])
+        except (ValueError, IndexError, TypeError) as error:
+            raise ValueError("Transition diagnostic requires a valid --reasoning-config") from error
+        end = transition.get("reasoning_end_str") if isinstance(transition, dict) else None
+        if not isinstance(end, str) or not end.endswith("</think>") or end == "</think>":
+            raise ValueError("Transition diagnostic requires a phrase before </think>")
+        value["reasoning_transition"] = transition
+        value["replays"] = diagnostic_cases(config, replays)
+        value["diagnostic_check"] = "reasoning_transition"
+    elif replays:
+        raise ValueError("--replay is only valid with --stage diagnostic")
     hashes = source_hashes()
     if stage == "collection":
         if pilot is None:
@@ -177,10 +239,48 @@ def plan(output, stage, minutes, pilot=None):
     save(output / "plan.json", value)
     return {
         "episodes": len(value["episodes"]),
+        **({"replay_requests": 3, "check": value["diagnostic_check"]} if stage == "diagnostic" else {}),
         "jobs": len(value["tasks"]),
         "maximum_gpu_sbu": value["maximum_gpu_sbu"],
         "task_wall_minutes": value["task_wall_minutes"],
     }
+
+
+async def replay(root):
+    """Test the configured native reasoning transition once on each frozen failure; no study data or retries."""
+    value = json.loads((root / "plan.json").read_text())
+    config = value["config"]
+    sys.path.insert(0, str(language.UPSTREAM))
+    result = {"status": "partial", "study_data": False, "check": "reasoning_transition",
+              "cases": [], "ready_for_pilot": False}
+    target = root / "diagnostic-summary.json"
+    save(target, result)
+    for index, case in enumerate(value["replays"]):
+        game, agent_file = language.GAMES[case["game"]]
+        module = language.load_module("hm_replay_parser", language.UPSTREAM / "llm_plan/agent" / game / f"{agent_file}.py")
+        actor = module.DecentralizedAgent({"agent_id": "player_0", "self_improve": True}, None)
+        request = case["request"]
+        output = root / "replays" / f"case-{index:02d}"
+        output.mkdir(parents=True, exist_ok=False)
+        controller = Controller(
+            config["server_url"], config["model"], output, True, request["sampling_seed"],
+            config["request_tokens"], 1, config.get("thinking_token_budget"), sampling=config.get("sampling"),
+        )
+        row = {"case": index, "game": case["game"], "passed": False, "source_sha256": case["source_sha256"]}
+        try:
+            answer = await controller.complete(case["replay_system"], request["messages"][1]["content"])
+            parsed = actor.extract_dict(answer)
+            if not isinstance(parsed, dict) or case["expected_key"] not in parsed:
+                raise ValueError(f"Missing required upstream dictionary key: {case['expected_key']}")
+            row.update(passed=True, parsed=parsed)
+        except (OSError, ValueError, RuntimeError) as error:
+            row["error"] = repr(error)
+        result["cases"].append(row)
+        save(target, result)
+    result.update(status="complete", passed=sum(row["passed"] for row in result["cases"]))
+    result["ready_for_pilot"] = result["passed"] == 3
+    save(target, result)
+    return result
 
 
 def episode(root, index):
@@ -231,8 +331,14 @@ def episode(root, index):
             spec["sampling_seed"],
             config["request_tokens"],
             config["request_limit"],
+            thinking_token_budget=config.get("thinking_token_budget"),
+            sampling=config.get("sampling"),
         )
         actor = agent_module.DecentralizedAgent({"agent_id": "player_0", "self_improve": True}, controller)
+        manifest["prompt_corrections"] = []
+        if spec["game"] in {"rws", "arena"}:
+            actor.system_message = language.correct_payoff(actor.system_message)
+            manifest["prompt_corrections"].append("rws_payoff_normalization")
         actor.system_message += "\n" + corpus["response_instruction"]
         actor.agent_type, actor.llm_type = "hm", "gpt4"  # Select HM's generic parser, independent of server model name.
         hm.OUTPUT, hm.FRAME_LIMIT = output, spec["frames"]
@@ -324,12 +430,18 @@ def batch(root, index):
                     if time.monotonic() >= deadline:
                         raise TimeoutError("Model startup exceeded its frozen allowance")
                     time.sleep(1)
+            if value["stage"] == "diagnostic":
+                set_phase("generation_diagnostic", "replays")
+                result = asyncio.run(replay(root))
+                if not result["ready_for_pilot"]:
+                    raise RuntimeError("Transition diagnostic failed; inspect diagnostic-summary.json before another allocation")
             if value["stage"] == "pilot":
                 set_phase("translation_preparation", "preparation")
                 output = root / "preparation"
                 output.mkdir(exist_ok=False)
                 translator = Controller(
-                    config["server_url"], config["model"], output, False, config["seed"], config["request_tokens"], 100000
+                    config["server_url"], config["model"], output, False, config["seed"], config["request_tokens"], 100000,
+                    sampling=config.get("sampling"),
                 )
                 asyncio.run(language.prepare(root / "translations", translator))
             for row in value["tasks"][index]:
@@ -374,6 +486,17 @@ def report(root):
 
     rows = []
     allocation_data = json.loads((root / "plan.json").read_text())
+    task_errors = {}
+    for path in sorted(root.glob("tasks/[0-9][0-9][0-9][0-9].json")):
+        state = json.loads(path.read_text())
+        if state.get("error"):
+            task_errors[path.stem] = state["error"]
+    if allocation_data["stage"] == "diagnostic":
+        target = root / "diagnostic-summary.json"
+        result = json.loads(target.read_text()) if target.exists() else {
+            "status": "failed" if task_errors else "not_started", "ready_for_pilot": False,
+        }
+        return {**result, "task_errors": task_errors}
     phases = [
         phase
         for path in sorted(root.glob("energy/*/measurement-summary.json"))
@@ -400,6 +523,7 @@ def report(root):
                 "thinking",
                 "replicate",
                 "status",
+                "error",
                 "frames",
                 "focal_return",
                 "collective_return",
@@ -439,6 +563,8 @@ def report(root):
     return {
         "episodes": len(rows),
         "complete": sum(row["status"] == "complete" for row in rows),
+        "task_errors": task_errors,
+        "episode_errors": {row["id"]: row["error"] for row in rows if row.get("error")},
         "output": str(root / "episodes.csv"),
     }
 
@@ -447,14 +573,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("plan", "batch", "episode", "report"))
     parser.add_argument("output", type=Path)
-    parser.add_argument("--stage", choices=("pilot", "collection"), default="pilot")
+    parser.add_argument("--stage", choices=("pilot", "collection", "diagnostic"), default="pilot")
+    parser.add_argument("--replay", type=Path, nargs=3, metavar="REQUESTS_JSONL")
     parser.add_argument("--episode-minutes", type=float, default=50)
     parser.add_argument("--pilot", type=Path)
     parser.add_argument("--index", type=int, default=0)
     args = parser.parse_args()
     root = args.output.resolve()
     if args.command == "plan":
-        result = plan(root, args.stage, args.episode_minutes, args.pilot.resolve() if args.pilot else None)
+        result = plan(root, args.stage, args.episode_minutes, args.pilot.resolve() if args.pilot else None, args.replay)
     elif args.command == "batch":
         result = batch(root, args.index)
     elif args.command == "episode":

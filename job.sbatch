@@ -14,12 +14,13 @@ module load 2025
 module load Miniforge3/25.3.0-3
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$PWD/.conda/runtime"
+# Module reloads can leave base Python first on PATH even when this prefix is active.
 export COORDINATION_RUN_ROOT="$root"
 export HF_HOME="${HF_HOME:-$PWD/.cache/huggingface}"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 export TOKENIZERS_PARALLELISM=false VLLM_USE_FLASHINFER_SAMPLER=0
 export JAX_PLATFORMS=cpu XLA_PYTHON_CLIENT_PREALLOCATE=false
-export COORDINATION_ALLOCATED_SECONDS="$(squeue -h -j "$SLURM_JOB_ID" -o '%l' | python -c '
+export COORDINATION_ALLOCATED_SECONDS="$(squeue -h -j "$SLURM_JOB_ID" -o '%l' | "$CONDA_PREFIX/bin/python" -c '
 import sys
 value=sys.stdin.read().strip()
 days,value=value.split("-",1) if "-" in value else ("0",value)
@@ -28,6 +29,6 @@ print(int(days)*86400+sum(int(v)*60**i for i,v in enumerate(reversed(value.split
 # TERM arrives before Slurm's hard kill so evidence and energy records can flush.
 limit=$((COORDINATION_ALLOCATED_SECONDS - 45))
 test "$limit" -gt 0
-python measure.py "$root/energy/$(printf '%04d' "$index")" -- \
+"$CONDA_PREFIX/bin/python" measure.py "$root/energy/$(printf '%04d' "$index")" -- \
     timeout --signal=TERM --kill-after=20s "${limit}s" \
-    python run.py batch "$root" --index "$index"
+    "$CONDA_PREFIX/bin/python" run.py batch "$root" --index "$index"
